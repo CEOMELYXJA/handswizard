@@ -1,3 +1,3 @@
-opencv-python
-mediapipe
-pyautogui
+# Utilise uniquement par le mode iPhone; le mode webcam utilise la bibliotheque standard.
+aiohttp>=3.10,<4
+pyautogui>=0.9.54,<1

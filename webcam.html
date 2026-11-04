@@ -1,0 +1,5 @@
+<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Handswizard — webcam</title>
+<style>body{font:18px system-ui;max-width:800px;margin:auto;padding:1rem;background:#101724;color:white}button{font-size:1.1rem;padding:.8rem;margin:.3rem}video{width:min(100%,600px);transform:scaleX(-1)}#status{color:#9fe6c4}</style>
+<h1>Ta main devient ta souris</h1><p>Place ta main devant la webcam. Le curseur Windows suit ta main, même dans les autres applications. Garde cette page ouverte et visible.</p>
+<p>Pince pouce-index pour cliquer ou glisser; pouce-majeur pour le clic droit. Lève index et majeur, replie les autres doigts et bouge la main pour défiler.</p>
+<button id="start">Activer la webcam</button><button id="toggle" disabled>Activer la souris</button><button id="stop">Arrêt immédiat</button><p id="status" role="status">En pause.</p><video id="video" autoplay playsinline muted></video><script type="module" src="/webcam.js"></script></html>
