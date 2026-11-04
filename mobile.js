@@ -58,7 +58,7 @@ setInterval(()=>{
  let x=speedAxis(angleDelta(reading.gamma,neutral.gamma))*gain;
  let y=speedAxis(angleDelta(reading.beta,neutral.beta))*gain;
  rx=.55*rx+.45*x;ry=.55*ry+.45*y;
- if(Math.abs(rx)+Math.abs(ry)>.5)send({type:"move",dx:rx,dy:ry});
+ send({type:"move",dx:rx,dy:ry});
 },33);
 document.addEventListener("visibilitychange",()=>{if(document.hidden)stop();});
 window.addEventListener("pagehide",stop);
