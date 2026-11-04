@@ -1,173 +1,141 @@
+"""Souris Windows pilotée par la webcam.
+
+Gestes : index=pointer ; pouce-index=maintenir/clic gauche ;
+pouce-majeur=clic droit ; V=index+majeur=defiler.
+P = pause/reprise ; Q ou Echap = quitter. Webcam locale (pas de cloud).
 """
-Souris mains libres : la caméra (ton iPhone utilisé comme webcam) suit ta main
-et contrôle le curseur de l'ordi.
-
-Gestes :
-  - Main ouverte / index pointé : le curseur suit ta main (jointure de l'index)
-  - Pincer pouce + index        : clic gauche (garde pincé = glisser-déposer)
-  - Pincer pouce + majeur       : clic droit
-  - Index + majeur levés (V)    : mode défilement, monte/descends la main
-
-Touches dans la fenêtre d'aperçu :
-  q = quitter      p = pause / reprendre
-"""
-
 import math
+import time
 
 import cv2
 import mediapipe as mp
 import pyautogui
 
-# ---------- Réglages ----------
-CAMERA_INDEX = 0        # change à 1, 2... si c'est la mauvaise caméra
-MARGIN = 0.18           # zone de la caméra ignorée sur les bords (plus grand = moins de mouvement requis)
-SMOOTH = 0.30           # 0.1 = très lisse mais lent, 0.6 = nerveux
-PINCH_ON = 0.30         # seuil pour déclencher le pincement (plus petit = pincer plus fort)
-PINCH_OFF = 0.45        # seuil pour relâcher
-SCROLL_SPEED = 2500     # vitesse du défilement
-
-pyautogui.FAILSAFE = False   # on quitte avec la touche q à la place
+CAMERA_INDEX = 0
+MARGIN = .16
+SMOOTHING = .27
+PINCH_ON = .27
+PINCH_OFF = .43
+MIN_FRAMES = 3
+LOST_FRAMES = 3
+SCROLL_FACTOR = 100
+pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0
 
-screen_w, screen_h = pyautogui.size()
-mp_hands = mp.solutions.hands
-mp_draw = mp.solutions.drawing_utils
 
-
-def dist(a, b):
+def length(a, b):
     return math.hypot(a.x - b.x, a.y - b.y)
 
 
-def extended(lm, tip, pip):
-    # Doigt "levé" si le bout est plus haut que l'articulation du milieu (main à l'endroit)
-    return lm[tip].y < lm[pip].y
-
-
-def clamp(v, lo, hi):
-    return max(lo, min(hi, v))
+def clamp(value, low, high):
+    return max(low, min(high, value))
 
 
 def main():
-    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not hasattr(mp, "solutions"):
+        raise RuntimeError("MediaPipe incompatible. Installe la version de requirements.txt (Python 3.11).")
+    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        print("Impossible d'ouvrir la caméra. Essaie un autre CAMERA_INDEX.")
-        return
+        raise RuntimeError("Webcam introuvable : vérifie CAMERA_INDEX et les autorisations Windows.")
 
-    hands = mp_hands.Hands(
-        max_num_hands=1,
-        model_complexity=0,
-        min_detection_confidence=0.6,
-        min_tracking_confidence=0.6,
-    )
-
-    cur_x, cur_y = screen_w / 2, screen_h / 2
+    width, height = pyautogui.size()
+    posx, posy = width / 2, height / 2
+    paused = True  # Démarrage en pause pour éviter les clics accidentels
     left_down = False
-    right_down = False
-    paused = False
-    prev_scroll_y = None
+    pinch_counter = 0
+    right_counter = 0
+    right_triggered = False
+    lost = 0
+    last_scroll = None
+    hands = mp.solutions.hands.Hands(max_num_hands=1, model_complexity=0,
+        min_detection_confidence=.65, min_tracking_confidence=.65)
 
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-
-        frame = cv2.flip(frame, 1)  # effet miroir : main à droite = curseur à droite
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = hands.process(rgb)
-        status = "pause" if paused else "aucune main"
-
-        if result.multi_hand_landmarks:
-            hand = result.multi_hand_landmarks[0]
-            lm = hand.landmark
-            mp_draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
-
-            if not paused:
-                size = dist(lm[0], lm[9]) or 1e-6  # taille de la main (poignet -> base du majeur)
-                pinch_l = dist(lm[4], lm[8]) / size   # pouce-index
-                pinch_r = dist(lm[4], lm[12]) / size  # pouce-majeur
-
-                index_up = extended(lm, 8, 6)
-                middle_up = extended(lm, 12, 10)
-                ring_up = extended(lm, 16, 14)
-                pinky_up = extended(lm, 20, 18)
-
-                scroll_mode = (
-                    index_up and middle_up and not ring_up and not pinky_up
-                    and pinch_l > 0.6 and pinch_r > 0.6
-                )
+    try:
+        while True:
+            ok, image = cap.read()
+            if not ok:
+                break
+            image = cv2.flip(image, 1)
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            found = hands.process(rgb)
+            status = "PAUSE (P pour activer)" if paused else "Aucune main"
+            lm = found.multi_hand_landmarks[0].landmark if found.multi_hand_landmarks else None
+            if not paused and lm:
+                lost = 0
+                size = max(length(lm[0], lm[9]), .0001)
+                lpinch = length(lm[4], lm[8]) / size
+                rpinch = length(lm[4], lm[12]) / size
+                index = lm[8].y < lm[6].y
+                middle = lm[12].y < lm[10].y
+                ring = lm[16].y < lm[14].y
+                pinky = lm[20].y < lm[18].y
+                scroll_mode = index and middle and not ring and not pinky and lpinch > .6 and rpinch > .6
 
                 if scroll_mode:
-                    status = "defilement"
-                    y = lm[9].y
-                    if prev_scroll_y is not None:
-                        delta = prev_scroll_y - y  # main qui monte = défile vers le haut
-                        if abs(delta) > 0.004:
-                            pyautogui.scroll(int(delta * SCROLL_SPEED))
-                    prev_scroll_y = y
-                else:
-                    prev_scroll_y = None
-                    status = "curseur"
-
-                    # Position : jointure de l'index (stable pendant le pincement)
-                    nx = clamp((lm[5].x - MARGIN) / (1 - 2 * MARGIN), 0, 1)
-                    ny = clamp((lm[5].y - MARGIN) / (1 - 2 * MARGIN), 0, 1)
-                    tx, ty = nx * (screen_w - 1), ny * (screen_h - 1)
-                    cur_x += (tx - cur_x) * SMOOTH
-                    cur_y += (ty - cur_y) * SMOOTH
-                    pyautogui.moveTo(int(cur_x), int(cur_y))
-
-                    # Clic gauche / glisser (avec hystérésis pour éviter les clics fantômes)
-                    if not left_down and pinch_l < PINCH_ON:
-                        pyautogui.mouseDown(button="left")
-                        left_down = True
-                    elif left_down and pinch_l > PINCH_OFF:
+                    if left_down:
                         pyautogui.mouseUp(button="left")
                         left_down = False
-
-                    # Clic droit
-                    if not right_down and pinch_r < PINCH_ON and not left_down:
-                        pyautogui.mouseDown(button="right")
-                        right_down = True
-                    elif right_down and pinch_r > PINCH_OFF:
-                        pyautogui.mouseUp(button="right")
-                        right_down = False
-
+                    pinch_counter = right_counter = 0
+                    y = lm[9].y
+                    if last_scroll is not None:
+                        amount = round(clamp((last_scroll-y)*SCROLL_FACTOR, -4, 4))
+                        if amount:
+                            pyautogui.scroll(amount)
+                    last_scroll = y
+                    status = "DEFILER"
+                else:
+                    last_scroll = None
+                    x = clamp((lm[5].x-MARGIN)/(1-2*MARGIN), .01, .99)*(width-1)
+                    y = clamp((lm[5].y-MARGIN)/(1-2*MARGIN), .01, .99)*(height-1)
+                    posx += (x-posx)*SMOOTHING
+                    posy += (y-posy)*SMOOTHING
+                    pyautogui.moveTo(round(clamp(posx, 3, width-4)),
+                                     round(clamp(posy, 3, height-4)))
+                    pinch_counter = pinch_counter+1 if lpinch < PINCH_ON else 0
+                    right_counter = right_counter+1 if rpinch < PINCH_ON and not left_down else 0
+                    if not left_down and pinch_counter >= MIN_FRAMES:
+                        pyautogui.mouseDown(button="left")
+                        left_down = True
+                    elif left_down and lpinch > PINCH_OFF:
+                        pyautogui.mouseUp(button="left")
+                        left_down = False
+                    if right_counter >= MIN_FRAMES and not right_triggered:
+                        pyautogui.click(button="right")
+                        right_triggered = True
+                    if rpinch > PINCH_OFF:
+                        right_triggered = False
+                    status = "GLISSER" if left_down else "POINTER"
+            elif not paused:
+                lost += 1
+                if lost >= LOST_FRAMES:
                     if left_down:
-                        status = "clic / glisser"
-                    elif right_down:
-                        status = "clic droit"
-        else:
-            # Main perdue : on relâche tout par sécurité
-            if left_down:
-                pyautogui.mouseUp(button="left")
-                left_down = False
-            if right_down:
-                pyautogui.mouseUp(button="right")
-                right_down = False
-            prev_scroll_y = None
-
-        cv2.putText(frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        cv2.imshow("Souris mains libres  (q = quitter, p = pause)", frame)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
-        if key == ord("p"):
-            paused = not paused
-            if paused:
+                        pyautogui.mouseUp(button="left")
+                        left_down = False
+                    pinch_counter = right_counter = 0
+                    right_triggered = False
+                    last_scroll = None
+            cv2.putText(image, status, (12, 34), cv2.FONT_HERSHEY_SIMPLEX,
+                        .8, (0, 255, 180), 2)
+            cv2.imshow("Handswizard - P=pause Q=quitter", image)
+            key = cv2.waitKey(1) & 0xff
+            if key in (ord("q"), 27):
+                break
+            if key == ord("p"):
+                paused = not paused
                 if left_down:
                     pyautogui.mouseUp(button="left")
                     left_down = False
-                if right_down:
-                    pyautogui.mouseUp(button="right")
-                    right_down = False
-
-    if left_down:
-        pyautogui.mouseUp(button="left")
-    if right_down:
-        pyautogui.mouseUp(button="right")
-    cap.release()
-    cv2.destroyAllWindows()
+                pinch_counter = right_counter = lost = 0
+                right_triggered = False
+                last_scroll = None
+    except pyautogui.FailSafeException:
+        print("Arret de securite PyAutoGUI : coin de l'ecran atteint.")
+    finally:
+        if left_down:
+            pyautogui.mouseUp(button="left")
+        hands.close()
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
