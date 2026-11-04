@@ -1,29 +1,22 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-  echo Creation de l'environnement Python 3.11...
-  py -3.11 -m venv .venv
-  if errorlevel 1 (
-    echo Python 3.11 x64 est requis. Installer depuis python.org.
-    pause
-    exit /b 1
-  )
-)
-call .venv\Scripts\activate.bat
-python -m pip install -r requirements.txt
-if errorlevel 1 (
-  echo Installation incomplete. Verifie Python 3.11 et internet.
-  pause
-  exit /b 1
-)
-echo.
-echo [1] Souris iPhone (gyroscope) - serveur prive
-echo [2] Webcam (mains libres) - detection des doigts
+echo [1] Webcam : mains libres (Python 3.15, aucun paquet Python a installer)
+echo [2] iPhone : gyroscope (dependances additionnelles)
 choice /C 12 /M "Mode"
-if errorlevel 2 (
-  python handtracking_souris.py
-) else (
-  python iphone_server.py
-)
+if errorlevel 2 goto iphone
+py -3.15 webcam_server.py
+if errorlevel 1 echo Impossible de demarrer. Verifie que Python 3.15 est installe.
+pause
+exit /b
+:iphone
+if not exist ".venv-iphone\Scripts\python.exe" py -3.15 -m venv .venv-iphone
+if errorlevel 1 goto error
+.venv-iphone\Scripts\python.exe -m pip install -r requirements.txt
+if errorlevel 1 goto error
+.venv-iphone\Scripts\python.exe iphone_server.py
+pause
+exit /b
+:error
+echo Installation iPhone incomplete. Verifie Python et Internet.
 pause
